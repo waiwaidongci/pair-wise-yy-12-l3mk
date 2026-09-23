@@ -1,124 +1,145 @@
 import "./styles.css";
+import { BookingForm } from "./components/BookingForm";
+import { BookingList } from "./components/BookingList";
+import { useSchedule } from "./hooks/useSchedule";
+import type { ListFilter } from "./domain/scheduling";
 
-const project = {
-  "sourceNo": 6,
-  "id": "hxyfront-62011",
-  "port": 62011,
-  "title": "马术蹄铁修整档案",
-  "domain": "马术蹄铁",
-  "prompt": "做一个面向马术俱乐部蹄铁师的修蹄记录前端项目，可以记录马匹编号、步态问题、蹄形评估、蹄铁类型、钉位、修蹄日期、下次复查日期和照片备注。页面需要有马匹列表、复查提醒、左右前后蹄对比记录、异常步态标记和蹄铁更换历史。",
-  "palette": [
-    "#78350f",
-    "#166534",
-    "#2563eb"
-  ],
-  "metrics": [
-    "待复查",
-    "异常步态",
-    "更换蹄铁",
-    "马匹档案"
-  ],
-  "filters": [
-    "前蹄",
-    "后蹄",
-    "运动马",
-    "休养马"
-  ],
-  "fields": [
-    "马匹编号",
-    "步态问题",
-    "蹄形评估",
-    "蹄铁类型",
-    "钉位",
-    "下次复查"
-  ],
-  "records": [
-    [
-      "HORSE-18",
-      "右前蹄外侧磨耗",
-      "铝蹄铁",
-      "14天后复查"
-    ],
-    [
-      "HORSE-27",
-      "后蹄裂纹",
-      "加护蹄垫",
-      "拍照归档"
-    ],
-    [
-      "HORSE-31",
-      "步态轻微不稳",
-      "需教练复核",
-      "已标记"
-    ]
-  ]
-};
+const FILTERS: { key: ListFilter; label: string }[] = [
+  { key: "all", label: "全部" },
+  { key: "pending", label: "待确认" },
+  { key: "ready", label: "可作业" },
+  { key: "done", label: "已完成" },
+];
 
 function App() {
+  const {
+    view,
+    visible,
+    archive,
+    filter,
+    setFilter,
+    notices,
+    addBooking,
+    confirmFarrier,
+    revokeFarrier,
+    confirmAssistant,
+    changeRisk,
+    cancelBooking,
+    completeBooking,
+  } = useSchedule();
+
+  const conflictCount = view.waiting.filter((b) => b.conflicts.some((c) => c.type === "overlap")).length;
+
+  const metrics = [
+    { label: "待确认", value: view.waiting.length },
+    { label: "可作业", value: view.held.length },
+    { label: "时段冲突排队", value: conflictCount },
+    { label: "已归档", value: archive.length },
+  ];
+
   return (
     <main className="app">
       <section className="hero">
-        <p>{project.id} · 源提示词{project.sourceNo} · Port {project.port}</p>
-        <h1>{project.title}</h1>
-        <span>{project.prompt}</span>
+        <p>hxyfront-62011 · 蹄铁上门 · 预约风险排程</p>
+        <h1>马术蹄铁修整 · 风险排程台</h1>
+        <span>
+          记录每匹马的抬蹄耐受、最近踢踏史、所需助手与到场时段；高风险马须两名蹄铁师双确认才能占时段，
+          时段重叠或助手未确认一律退回排队并列出冲突；取消或改评级后，原时段按顺序交给排队中的下一匹。
+        </span>
       </section>
 
       <section className="metrics">
-        {project.metrics.map((metric: string, index: number) => (
-          <article key={metric}>
-            <small>{metric}</small>
-            <strong>{[28, 6, 14, 91][index] ?? 10}</strong>
+        {metrics.map((m) => (
+          <article key={m.label}>
+            <small>{m.label}</small>
+            <strong>{m.value}</strong>
           </article>
         ))}
       </section>
 
+      {notices.length > 0 && (
+        <section className="notice-banner">
+          {notices.map((n, i) => (
+            <p key={i}>↻ {n}</p>
+          ))}
+        </section>
+      )}
+
       <section className="workspace">
-        <aside className="panel">
-          <h2>{project.domain}分类</h2>
-          <div className="chips">
-            {project.filters.map((item: string) => (
-              <button key={item}>{item}</button>
+        <aside className="panel sidebar">
+          <h2>列表筛选</h2>
+          <div className="chips filter-chips">
+            {FILTERS.map((f) => (
+              <button
+                key={f.key}
+                className={filter === f.key ? "chip-active" : ""}
+                onClick={() => setFilter(f.key)}
+              >
+                {f.label}
+              </button>
             ))}
           </div>
+
+          <h2 className="sidebar-gap">占时段规则</h2>
+          <ul className="rules">
+            <li>高风险马：两名蹄铁师双确认后才可占时段</li>
+            <li>所需助手未确认到场：退回排队</li>
+            <li>时段与更早的已占单重叠：退回排队</li>
+            <li>同一时段按提交先后 FIFO，先满足条件者占单</li>
+            <li>取消或改评级释放时段后，自动递给排队中的下一匹</li>
+          </ul>
+
+          <h2 className="sidebar-gap">当前冲突</h2>
+          {view.waiting.every((b) => b.conflicts.length === 0) && <p className="muted">暂无冲突，队列已清空</p>}
+          <ul className="conflict-summary">
+            {view.waiting
+              .filter((b) => b.conflicts.length > 0)
+              .map((b) => (
+                <li key={b.id}>
+                  <b>{b.horseId}</b>
+                  {b.conflicts.map((c, i) => (
+                    <span key={i} className={`dot conflict-${c.type}`} title={c.message}>
+                      {c.type === "overlap" ? "重叠" : c.type === "assistant" ? "待助手" : "待双确认"}
+                    </span>
+                  ))}
+                </li>
+              ))}
+          </ul>
+
+          <h2 className="sidebar-gap">归档记录</h2>
+          {archive.length === 0 && <p className="muted">暂无完成/取消记录</p>}
+          <ul className="archive-list">
+            {archive.slice(0, 6).map((a) => (
+              <li key={`${a.id}-${a.at}`}>
+                <span className={`phase-dot ${a.outcome}`} />
+                <b>{a.horseId}</b>
+                <em>{a.outcome === "done" ? "已完成" : "已取消"}</em>
+                <time>{new Date(a.at).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })}</time>
+              </li>
+            ))}
+          </ul>
         </aside>
 
-        <section className="panel form-panel">
-          <div className="heading">
-            <div>
-              <p>专业字段</p>
-              <h2>新增记录</h2>
-            </div>
-            <button className="primary">保存记录</button>
-          </div>
-          <div className="field-grid">
-            {project.fields.map((field: string) => (
-              <label key={field}>
-                <span>{field}</span>
-                <input placeholder={"填写" + field} />
-              </label>
-            ))}
-          </div>
-        </section>
-      </section>
+        <div className="main-col">
+          <BookingForm onSubmit={addBooking} />
 
-      <section className="panel">
-        <div className="heading">
-          <div>
-            <p>近期记录</p>
-            <h2>工作台摘要</h2>
-          </div>
-          <button>导出CSV</button>
-        </div>
-        <div className="records">
-          {project.records.map((record: string[], index: number) => (
-            <article key={record.join("-")}>
-              <b>{String(index + 1).padStart(2, "0")}</b>
+          <section className="panel list-panel">
+            <div className="heading">
               <div>
-                <h3>{record[0]}</h3>
-                <p>{record.slice(1).join(" · ")}</p>
+                <p>排程状态由系统统一判定</p>
+                <h2>{FILTERS.find((f) => f.key === filter)?.label}（{visible.length}）</h2>
               </div>
-            </article>
-          ))}
+            </div>
+            <BookingList
+              bookings={visible}
+              onConfirmFarrier={confirmFarrier}
+              onRevokeFarrier={revokeFarrier}
+              onConfirmAssistant={confirmAssistant}
+              onChangeRisk={changeRisk}
+              onCancel={cancelBooking}
+              onComplete={completeBooking}
+            />
+          </section>
         </div>
       </section>
     </main>
